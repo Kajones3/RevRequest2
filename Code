@@ -1,0 +1,339 @@
+
+#************************************************************************************************************************
+#
+#
+#                                     LET'S DO THE REVV EVALUATION REQUEST
+#
+#
+#***************************************************************************************************************************
+
+library(tidyverse)
+library(magrittr) # need for  %<>%
+library(readr) # Need for read_csv
+library(data.table) # Use for %like%
+library(lubridate)
+library(zoo)
+
+# Use the SQL file "RevProject.RMD" to get the store data.
+stores
+
+stores2 <- stores %>%
+  filter(!is.na(StoreID))
+
+# write_csv(stores2, "C:/Users/Ken.Jones/OneDrive - ABC Phones of North Carolina, Inc/Rev/ForR - Stores CLEAN.csv")
+# stores <- read_csv("C:/Users/Ken.Jones/OneDrive - ABC Phones of North Carolina, Inc/Rev/ForR - Stores.csv")
+
+
+stores2 <- stores %>%
+  filter(!is.na(StoreID)) %>%
+  filter(FirstInvoiceDate <= "2018-06-01")
+  
+
+
+
+# Pull in the initial Revv Stores from this place.
+# The California Stores are also included in this.
+revList <- read_csv("C:/Users/Ken.Jones/OneDrive - ABC Phones of North Carolina, Inc/Rev/Rev Store Test List.csv")
+
+
+# Pull in the data from the UMICH section
+demo_data <- read_csv("C:/Users/Ken.Jones/OneDrive - ABC Phones of North Carolina, Inc/Stores/001_SummarizedData.csv")
+demo_data$X1 <- NULL
+
+
+# Assign the test periods
+stores2 %<>%
+  mutate(
+    period = case_when(
+      DayDate >= "2018-06-01" & DayDate <= "2018-09-11" ~ "Pre_2018",
+      DayDate >= "2019-06-01" & DayDate <= "2019-09-11" ~ "Pre_2019",
+      DayDate >= "2018-09-12" & DayDate <= "2018-11-30" ~ "Post_2018",
+      DayDate >= "2019-09-12" & DayDate <= "2019-11-30" ~ "Post_2019"
+    ))
+
+# Get rid of data that is not in the test period.
+stores2 %<>%
+  filter(!is.na(period))
+
+# We need to create a variable to match the Rev stores and Cont stores later on.
+stores2 %<>% mutate(
+  match = "one"
+)
+
+# Join the data
+RevStores <- inner_join(stores2, revList[c("StoreName")], by = "StoreName")
+ContStores <- anti_join(stores2, revList[c("StoreName")], by = "StoreName")
+
+
+# Add in the CA stores to the Rev Count
+ContStores %<>% filter(StoreState != 'CA')
+CAstores <- stores2 %>% filter(StoreState == 'CA')
+RevStores <- bind_rows(CAstores, RevStores)
+
+# Check the math
+length(unique(ContStores$StoreName)) +
+length(unique(RevStores$StoreName))
+
+
+# This is when we get to match the controls.
+
+
+total <- inner_join(RevStores, ContStores, by = c("match", "DayDate"))
+
+# Now get rid of the places where Traffic is not equal.
+total %<>%
+  filter(Traffic.x > 0 & Traffic.y > 0)
+
+
+total_traffic <- total %>%
+  group_by(StoreName.x, StoreName.y, DayDate) %>%
+  summarize(
+    TestPostTraffic2019 = sum(Traffic.x[period.x == "Post_2019"], na.rm = T),
+    TestPostTraffic2018 = sum(Traffic.x[period.x == "Post_2018"], na.rm = T),
+    TestPreTraffic2019 = sum(Traffic.x[period.x == "Pre_2019"], na.rm = T),
+    TestPreTraffic2018 = sum(Traffic.x[period.x == "Pre_2018"], na.rm = T),
+    CompPostTraffic2019 = sum(Traffic.y[period.y == "Post_2019"], na.rm = T),
+    CompPostTraffic2018 = sum(Traffic.y[period.y == "Post_2018"], na.rm = T),
+    CompPreTraffic2019 = sum(Traffic.y[period.y == "Pre_2019"], na.rm = T),
+    CompPreTraffic2018 = sum(Traffic.y[period.y == "Pre_2018"], na.rm = T))
+
+
+
+
+
+
+
+
+
+
+
+
+# Matching the controls creates 24,900,854,946 rows. That's too much for R.
+# So we need to take the analysis of control stores down to two rows. 
+# Then we can judge the Rev stores on each of those two rows.
+
+ContStores2 <- ContStores %>%
+  group_by(Area, Region, District, StoreID, StoreName, StoreState, match) %>%
+  summarize(
+    ConPostTraffic2019 = sum(Traffic[period == "Post_2019"], na.rm = T),
+    ConPostTraffic2018 = sum(Traffic[period == "Post_2018"], na.rm = T),
+    ConPreTraffic2019 = sum(Traffic[period == "Pre_2019"], na.rm = T),
+    ConPreTraffic2018 = sum(Traffic[period == "Pre_2018"], na.rm = T),
+    ConPostBoxes2019 = sum(Boxes[period == "Post_2019"], na.rm = T),
+    ConPostBoxes2018 = sum(Boxes[period == "Post_2018"], na.rm = T),
+    ConPreBoxes2019 = sum(Boxes[period == "Pre_2019"], na.rm = T),
+    ConPreBoxes2018 = sum(Boxes[period == "Pre_2018"], na.rm = T))
+   
+
+RevStores2 <- RevStores %>%
+  group_by(Area, Region, District, StoreID, StoreName, StoreState, match) %>%
+  summarize(
+    RevPostTraffic2019 = sum(Traffic[period == "Post_2019"], na.rm = T),
+    RevPostTraffic2018 = sum(Traffic[period == "Post_2018"], na.rm = T),
+    RevPreTraffic2019 = sum(Traffic[period == "Pre_2019"], na.rm = T),
+    RevPreTraffic2018 = sum(Traffic[period == "Pre_2018"], na.rm = T),
+    RevPostBoxes2019 = sum(Boxes[period == "Post_2019"], na.rm = T),
+    RevPostBoxes2018 = sum(Boxes[period == "Post_2018"], na.rm = T),
+    RevPreBoxes2019 = sum(Boxes[period == "Pre_2019"], na.rm = T),
+    RevPreBoxes2018 = sum(Boxes[period == "Pre_2018"], na.rm = T))
+
+
+# Write the first data set in a new workbook
+# openxlsx::write.xlsx(RevStores, file = "C:/Users/Ken.Jones/OneDrive - ABC Phones of North Carolina, Inc/Rev/RevData-REV.xlsx",
+#            sheetName = "Rev Stores", append = TRUE)
+# # Add a second data set in a new worksheet
+# openxlsx::write.xlsx(ContStores, file = "C:/Users/Ken.Jones/OneDrive - ABC Phones of North Carolina, Inc/Rev/RevData-Controls.xlsx", 
+#            sheetName="Control Stores", append=TRUE)
+
+# Okay, now that we've made them smaller, we can do the YOY on each DF.
+ControlGroup <- ContStores2 %>%
+  group_by(match) %>%
+  summarize(
+    ConPostTraffic = sum(ConPostTraffic2019, na.rm = T)/sum(ConPostTraffic2018, na.rm = T) - 1,
+    ConPreTraffic = sum(ConPreTraffic2019, na.rm = T)/sum(ConPreTraffic2018, na.rm = T) - 1,
+    ConPreBoxes = sum(ConPreBoxes2019, na.rm = T)/sum(ConPreBoxes2018, na.rm = T) - 1,
+    ConPostBoxes = sum(ConPostBoxes2019, na.rm = T)/sum(ConPostBoxes2018, na.rm = T) - 1)
+
+RevGroup <- RevStores2 %>%
+  group_by(match) %>%
+  summarize(
+    TestPostTraffic = sum(RevPostTraffic2019, na.rm = T)/sum(RevPostTraffic2018, na.rm = T) - 1,
+    TestPreTraffic = sum(RevPreTraffic2019, na.rm = T)/sum(RevPreTraffic2018, na.rm = T) - 1,
+    TestPreBoxes = sum(RevPreBoxes2019, na.rm = T)/sum(RevPreBoxes2018, na.rm = T) - 1,
+    TestPostBoxes = sum(RevPostBoxes2019, na.rm = T)/sum(RevPostBoxes2018, na.rm = T) - 1)
+
+# Now let's see how we did with each one?
+test_control_Group <- merge(RevGroup, ControlGroup, by = "match")
+
+results <- test_control_Group %>%
+mutate(
+  yTraffic = TestPostTraffic - ConPostTraffic,
+  xTraffic = TestPreTraffic - ConPreTraffic,
+  yBoxes = TestPostBoxes - ConPostBoxes,
+  xBoxes = TestPreBoxes - ConPreBoxes) %>%
+  mutate(
+    TrafficDouble = yTraffic - xTraffic,
+    BoxesDouble = yBoxes - xBoxes
+  )
+
+# What happened if we pitted each Rev store against the general concensus?
+Grouped_Control <- merge(Revs, ControlGroup, by = "match")
+
+# Trying to make any increases fair.
+Grouped_Control %<>%
+  filter(is.finite(xTraffic) &
+           is.finite(yTraffic) &
+           is.finite(xBoxes) &
+           is.finite(yBoxes))
+
+Grouped_Control %<>%
+  mutate(
+    yTraffic = TestPostTraffic - ConPostTraffic,
+    xTraffic = TestPreTraffic - ConPreTraffic,
+    yBoxes = TestPostBoxes - ConPostBoxes,
+    xBoxes = TestPreBoxes - ConPreBoxes) %>%
+  mutate(
+    TrafficDouble = yTraffic - xTraffic,
+    BoxesDouble = yBoxes - xBoxes
+  )
+
+
+
+Grouped_Control %>%
+  filter(BoxesDouble > 0) %>%
+  group_by(StoreName) %>%
+  summarize(
+    count = n()
+  ) %>%
+  arrange(desc(count))
+
+
+
+
+
+
+# Now let's see how we did with each store?
+Controls <- ContStores2 %>%
+  group_by(Area, Region, District, StoreID, StoreName, StoreState, match) %>%
+  summarize(
+    ConPostTraffic = sum(ConPostTraffic2019, na.rm = T)/sum(ConPostTraffic2018, na.rm = T) - 1,
+    ConPreTraffic = sum(ConPreTraffic2019, na.rm = T)/sum(ConPreTraffic2018, na.rm = T) - 1,
+    ConPreBoxes = sum(ConPreBoxes2019, na.rm = T)/sum(ConPreBoxes2018, na.rm = T) - 1,
+    ConPostBoxes = sum(ConPostBoxes2019, na.rm = T)/sum(ConPostBoxes2018, na.rm = T) - 1)
+
+
+Revs <- RevStores2 %<>%
+  group_by(Area, Region, District, StoreID, StoreName, StoreState, match) %>%
+  summarize(
+    TestPostTraffic = sum(RevPostTraffic2019, na.rm = T)/sum(RevPostTraffic2018, na.rm = T) - 1,
+    TestPreTraffic = sum(RevPreTraffic2019, na.rm = T)/sum(RevPreTraffic2018, na.rm = T) - 1,
+    TestPreBoxes = sum(RevPreBoxes2019, na.rm = T)/sum(RevPreBoxes2018, na.rm = T) - 1,
+    TestPostBoxes = sum(RevPostBoxes2019, na.rm = T)/sum(RevPostBoxes2018, na.rm = T) - 1)
+
+# We are going to place all of the stores against one metric
+
+
+
+# Since the DFs are smaller, now we can to a match
+test_control <- merge(Revs, Controls, by = "match")
+
+test_control %<>%
+  mutate(
+    yTraffic = TestPostTraffic - ConPostTraffic,
+    xTraffic = TestPreTraffic - ConPreTraffic,
+    yBoxes = TestPostBoxes - ConPostBoxes,
+    xBoxes = TestPreBoxes - ConPreBoxes) %>%
+  mutate(
+    TrafficDouble = yTraffic - xTraffic,
+    BoxesDouble = yBoxes - xBoxes
+  )
+
+test_control %>%
+  filter(BoxesDouble > 0) %>%
+  group_by(District.x, StoreName.x) %>%
+  summarize(
+    count = n()
+  ) %>%
+  filter(count >= 325 )%>%
+  group_by(District.x) %>%
+  summarize(
+    count = n()
+  ) %>%
+  arrange(desc(count))
+
+
+
+
+# Now let's see how we did with each District?
+
+ControlsDistrict <- ContStores2 %>%
+  group_by(District, match) %>%
+  summarize(
+    ConPostTraffic = sum(ConPostTraffic2019, na.rm = T)/sum(ConPostTraffic2018, na.rm = T) - 1,
+    ConPreTraffic = sum(ConPreTraffic2019, na.rm = T)/sum(ConPreTraffic2018, na.rm = T) - 1,
+    ConPreBoxes = sum(ConPreBoxes2019, na.rm = T)/sum(ConPreBoxes2018, na.rm = T) - 1,
+    ConPostBoxes = sum(ConPostBoxes2019, na.rm = T)/sum(ConPostBoxes2018, na.rm = T) - 1)
+
+
+RevsDistrict <- RevStores2 %<>%
+  group_by(District, match) %>%
+  summarize(
+    TestPostTraffic = sum(RevPostTraffic2019, na.rm = T)/sum(RevPostTraffic2018, na.rm = T) - 1,
+    TestPreTraffic = sum(RevPreTraffic2019, na.rm = T)/sum(RevPreTraffic2018, na.rm = T) - 1,
+    TestPreBoxes = sum(RevPreBoxes2019, na.rm = T)/sum(RevPreBoxes2018, na.rm = T) - 1,
+    TestPostBoxes = sum(RevPostBoxes2019, na.rm = T)/sum(RevPostBoxes2018, na.rm = T) - 1)
+
+
+# Since the DFs are smaller, now we can to a match
+test_District <- merge(RevsDistrict, ControlsDistrict, by = "match")
+
+test_District %>%
+  mutate(
+    yTraffic = TestPostTraffic - ConPostTraffic,
+    xTraffic = TestPreTraffic - ConPreTraffic,
+    yBoxes = TestPostBoxes - ConPostBoxes,
+    xBoxes = TestPreBoxes - ConPreBoxes) %>%
+  mutate(
+    TrafficDouble = yTraffic - xTraffic,
+    BoxesDouble = yBoxes - xBoxes
+  )
+
+
+
+
+
+
+115278*216007
+
+stores$PostalCode <- gsub("-.*","",stores$PostalCode)
+stores %<>%
+  filter(Area %in% c("South", "East", "West"))
+stores$PostalCode <- as.numeric(stores$PostalCode)
+stores$PostalCode  <-  sprintf("%05d", stores$PostalCode)
+
+# Pull in the data from the UMICH section
+total_data <- read_csv("C:/Users/Ken.Jones/OneDrive - ABC Phones of North Carolina, Inc/Stores/001_SummarizedData.csv")
+
+
+revData <- left_join(stores, total_data, by = c("PostalCode" = "Zip"))
+
+traffic <- mean(revData$Traffic, na.rm = T)
+population <- mean(revData$Pop, na.rm=T)
+contribute <- mean(revData$Contribution, na.rm=T)
+
+# Now we can pull the stores where the traffic and the population are above average.
+noCA <- revData %>%
+  filter(State != "CA")
+
+
+final <- noCA %>%
+  filter(Traffic > traffic & Pop > population & Contribution > contribute)
+
+exceptions <- anti_join(noCA, final, by = "StoreName")
+
+adds <- exceptions %>%
+  filter(FirstInvoiceDate > '2018-06-01') %>%
+  top_n(30)
+
+final <- bind_rows(final, adds)
+write.csv(final, "C:/Users/Ken.Jones/OneDrive - ABC Phones of North Carolina, Inc/Stores/RevStores.csv")
